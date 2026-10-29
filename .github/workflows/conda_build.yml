@@ -10,9 +10,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # use oldest ubuntu/macos images for max glibc compat:
-        # https://stackoverflow.com/q/70019660
-        os: [ubuntu-22.04, windows-latest, macos-14, macos-15-intel]
+        os: [ubuntu-latest, windows-latest, macos-14, macos-15-intel]
     steps:
       - uses: actions/checkout@v6
         with: {fetch-depth: 0}
@@ -23,6 +21,21 @@ jobs:
           recipe-path: recipe.yaml
           build-args: --experimental
           artifact-name: package-${{ matrix.os }}
+      - if: startsWith(matrix.os, 'ubuntu')
+        name: check glibc support
+        env:
+          GLIBC_MAX: '2.28' # see recipe.yaml
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          unzip -q output/*/lib*.conda 'pkg-*' -d "$d"
+          tar --zstd -xf "$d"/pkg-*.tar.zst -C "$d"
+          max=$(objdump -T "$d"/lib/libtomophantom.so | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+          echo "expected max glibc symbol: GLIBC_${GLIBC_MAX} ; found: $max"
+          if [[ $(printf '%s\n%s\n' "$GLIBC_MAX" "${max#GLIBC_}" | sort -V | tail -1) != "$GLIBC_MAX" ]] ; then
+            echo "FAIL: $max > GLIBC_${GLIBC_MAX}" >&2
+            exit 1
+          fi
       - if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         name: conda upload -c httomo
         run: |
